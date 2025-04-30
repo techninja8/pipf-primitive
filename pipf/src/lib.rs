@@ -422,3 +422,38 @@ mod tests {
         }
     }
 }
+
+#[cfg(feature = "example")]
+fn main() {
+    use rand::rngs::OsRng;
+    
+    // Size of vectors (must be power of 2)
+    let n = 8;
+    println!("Generating Pedersen Vector Commitment for vectors of size {}", n);
+    
+    // Generate base points
+    let gens = create_generators(n);
+    
+    // Create random vectors
+    let a: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut OsRng)).collect();
+    let b: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut OsRng)).collect();
+    let r = Scalar::random(&mut OsRng);
+    
+    // Create commitment
+    let P = pedersen_vector_commitment(&a, &b, r, &gens);
+    println!("Created commitment P");
+    
+    // Calculate inner product
+    let c = inner_product(&a, &b);
+    println!("Inner product c = <a,b> calculated");
+    
+    // Generate proof
+    let mut prover_transcript = Transcript::new(b"example-inner-product");
+    let proof = generate_inner_product_proof(a.clone(), b.clone(), r, &gens, &mut prover_transcript);
+    println!("Generated inner product proof with {} L/R pairs", proof.L_vec.len());
+    
+    // Verify proof
+    let mut verifier_transcript = Transcript::new(b"example-inner-product");
+    let result = verify_inner_product_proof(P, c, &proof, &gens, &mut verifier_transcript);
+    println!("Verification result: {}", result);
+}

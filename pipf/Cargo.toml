@@ -12,3 +12,6 @@ serde_json = "1.0"
 sha2 = "0.10"
 byte-tools = "0.3.1"
 bulletproofs = "4.0"
+
+[features]
+example = []

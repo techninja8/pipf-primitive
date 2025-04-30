@@ -1,3 +1,5 @@
+// Practical example
+
 extern crate curve25519_dalek;
 extern crate rand;
 extern crate merlin;
