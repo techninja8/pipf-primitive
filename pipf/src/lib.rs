@@ -13,7 +13,7 @@ use curve25519_dalek::traits::Identity;
 use rand::rngs::OsRng;
 use merlin::Transcript;
 use serde::{Serialize, Deserialize};
-
+use std::fmt;
 pub trait TranscriptProtocol {
     fn append_point(&mut self, label: &'static [u8], point: &CompressedRistretto);
     fn challenge_scalar(&mut self, label: &'static [u8]) -> Scalar;
@@ -28,6 +28,15 @@ impl TranscriptProtocol for Transcript {
         let mut buf = [0u8; 64];
         self.challenge_bytes(label, &mut buf);
         Scalar::from_bytes_mod_order_wide(&buf)
+    }
+}
+
+struct DebugRistrettoPoint(RistrettoPoint);
+
+impl fmt::Debug for DebugRistrettoPoint {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        // Use the compressed representation of the RistrettoPoint for printing
+        write!(f, "RistrettoPoint({:?})", self.0.compress().to_bytes())
     }
 }
 
@@ -93,13 +102,9 @@ pub fn generate_inner_product_proof(
     gens: &Generators,
     transcript: &mut Transcript
 ) -> InnerProductProof {
-    // Validate input dimensions
-    // Panic for dimension mismatch
     assert_eq!(a.len(), b.len(), "Vector dimensions must match");
     assert_eq!(a.len(), gens.G_vec.len(), "Vector dimensions must match generator count");
     assert_eq!(a.len(), gens.H_vec.len(), "Vector dimensions must match generator count");
-    
-    // Ensure vector length is a power of 2 for simple demonstration
     assert!(a.len().is_power_of_two(), "Vector length must be a power of 2");
 
     let mut a = a;
@@ -110,10 +115,8 @@ pub fn generate_inner_product_proof(
     let mut L_vec = Vec::new();
     let mut R_vec = Vec::new();
     
-    // Label the proof in the transcript
     transcript.append_message(b"dom-sep", b"inner-product-proof");
     
-    // We implement recursive compression steps
     while a.len() > 1 {
         let n = a.len();
         let (a_L, a_R) = a.split_at(n / 2);
@@ -121,29 +124,25 @@ pub fn generate_inner_product_proof(
         let (G_L, G_R) = G_vec.split_at(n / 2);
         let (H_L, H_R) = H_vec.split_at(n / 2);
         
-        // Random blinding factors for L and R
         let r_L = Scalar::random(&mut OsRng);
         let r_R = Scalar::random(&mut OsRng);
         
-        // Compute the L commitment according to protocol
         let mut L = gens.G * r_L;
         for i in 0..(n / 2) {
             L += a_L[i] * G_R[i] + b_R[i] * H_L[i];
         }
         
-        // Compute the R commitment according to protocol
         let mut R = gens.G * r_R;
         for i in 0..(n / 2) {
             R += a_R[i] * G_L[i] + b_L[i] * H_R[i];
         }
         
-        // Add L and R to the transcript and generate challenge
         transcript.append_point(b"L", &L.compress());
         transcript.append_point(b"R", &R.compress());
+        
         let x = transcript.challenge_scalar(b"x");
         let x_inv = x.invert();
         
-        // Compress the vectors a and b
         let mut a_new = Vec::with_capacity(n / 2);
         let mut b_new = Vec::with_capacity(n / 2);
         for i in 0..(n / 2) {
@@ -153,7 +152,6 @@ pub fn generate_inner_product_proof(
         a = a_new;
         b = b_new;
         
-        // Compress the generators
         let mut G_new = Vec::with_capacity(n / 2);
         let mut H_new = Vec::with_capacity(n / 2);
         for i in 0..(n / 2) {
@@ -163,15 +161,12 @@ pub fn generate_inner_product_proof(
         G_vec = G_new;
         H_vec = H_new;
         
-        // Update the blinding factor
         r = r_L * x + r_R * x_inv;
         
-        // Store L and R values for the proof
         L_vec.push(L);
         R_vec.push(R);
     }
     
-    // Create the final proof
     InnerProductProof {
         L_vec,
         R_vec,
@@ -185,38 +180,31 @@ pub fn generate_inner_product_proof(
 /// 
 /// Checks if the claimed inner product c = <a,b> is correct for vectors committed in P
 pub fn verify_inner_product_proof(
-    P: RistrettoPoint,             // The original commitment
-    c: Scalar,                     // Claimed inner product value
-    proof: &InnerProductProof,     // The proof to verify
-    gens: &Generators,             // The generators used
-    transcript: &mut Transcript    // Transcript for Fiat-Shamir
+    P: RistrettoPoint,
+    c: Scalar,
+    proof: &InnerProductProof,
+    gens: &Generators,
+    transcript: &mut Transcript
 ) -> bool {
-    // Label the proof verification in the transcript
     transcript.append_message(b"dom-sep", b"inner-product-proof");
     
-    // Calculate number of rounds based on proof size
     let lg_n = proof.L_vec.len();
     let n = 1 << lg_n;
     
-    // Ensure generators are correct size
     if gens.G_vec.len() != n || gens.H_vec.len() != n {
         return false;
     }
     
-    // Extract the final values from the proof
     let a = proof.a_final;
     let b = proof.b_final;
     
-    // Check that the claimed inner product matches the final values
     if a * b != c {
         return false;
     }
     
-    // Collect all challenges for verification
     let mut challenges = Vec::with_capacity(lg_n);
     let mut challenge_inverses = Vec::with_capacity(lg_n);
     
-    // Replay transcript to get same challenges as prover
     for i in 0..lg_n {
         transcript.append_point(b"L", &proof.L_vec[i].compress());
         transcript.append_point(b"R", &proof.R_vec[i].compress());
@@ -225,20 +213,14 @@ pub fn verify_inner_product_proof(
         challenge_inverses.push(x_i.invert());
     }
     
-    // Calculate final generators after all folding operations
     let (final_G, final_H) = calculate_final_generators(gens, &challenges, &challenge_inverses, lg_n);
     
-    // Calculate the expected commitment from final values
     let final_commitment = gens.G * proof.r_final + 
                           final_G * proof.a_final + 
                           final_H * proof.b_final;
-        // Compute the contribution from L and R terms
+    
     let folded_commitment = fold_commitments(&proof.L_vec, &proof.R_vec, &challenges, &challenge_inverses);
     
-    // The verification succeeds if the original commitment equals the computed commitment
-
-    // Debug: The original commitmenr is not equals to the computed commitment
-    // We need to try to find out why this is so
     P == final_commitment + folded_commitment
 }
 
@@ -290,13 +272,19 @@ fn fold_commitments(
     challenge_inverses: &[Scalar]
 ) -> RistrettoPoint {
     let mut result = RistrettoPoint::identity();
-
+    
     for i in 0..L_vec.len() {
-        let x_sq = challenges[i] * challenges[i];
-        let x_inv_sq = challenge_inverses[i] * challenge_inverses[i];
-        result += L_vec[i] * x_sq + R_vec[i] * x_inv_sq;
+        let mut s_L = Scalar::from(1u64);
+        let mut s_R = Scalar::from(1u64);
+        
+        for j in 0..i {
+            s_L *= challenges[j];
+            s_R *= challenge_inverses[j];
+        }
+        
+        result += L_vec[i] * s_L + R_vec[i] * s_R;
     }
-
+    
     result
 }
 
@@ -379,7 +367,7 @@ mod tests {
         let mut verifier_transcript = Transcript::new(b"test-inner-product");
         let result = verify_inner_product_proof(P, c, &proof, &gens, &mut verifier_transcript);
         
-        assert!(!result, "Inner product proof verification failed");
+        assert!(result, "Inner product proof verification failed");
     }
     
     #[test]
