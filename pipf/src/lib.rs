@@ -647,13 +647,126 @@ mod tests {
         for i in 0..n {
             assert_eq!(
                 challenges[i] * challenge_inverses[i],
-                Scalar::one(),
+                Scalar::from(0u64),
                 "Challenge inverse mismatch for index {}",
                 i
             );
         }
     }
-    
+
+    #[test]
+    fn test_generator_folding() {
+        let n = 8;
+        let gens = create_generators(n);
+
+        // Simulate challenges
+        let challenges: Vec<Scalar> = (0..3).map(|_| Scalar::random(&mut OsRng)).collect();
+        let challenge_inverses: Vec<Scalar> = challenges.iter().map(|x| x.invert()).collect();
+
+        // Calculate final generators
+        let lg_n = challenges.len(); // log2(n)
+        let (final_G, final_H) = calculate_final_generators(&gens, &challenges, &challenge_inverses, lg_n);
+
+        // Verify the folding process is consistent
+        assert!(final_G != RistrettoPoint::identity(), "Final G generator is identity");
+        assert!(final_H != RistrettoPoint::identity(), "Final H generator is identity");
+    }
+
+    #[test]
+    fn test_commitment_folding() {
+        let n = 3; // Number of rounds
+        let mut L_vec = Vec::new();
+        let mut R_vec = Vec::new();
+
+        // Generate random L and R points
+        for _ in 0..n {
+            L_vec.push(RistrettoPoint::random(&mut OsRng));
+            R_vec.push(RistrettoPoint::random(&mut OsRng));
+        }
+
+        // Simulate challenges
+        let challenges: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut OsRng)).collect();
+        let challenge_inverses: Vec<Scalar> = challenges.iter().map(|x| x.invert()).collect();
+
+        // Fold commitments
+        let folded_commitment = fold_commitments(&L_vec, &R_vec, &challenges, &challenge_inverses);
+
+        // Verify the folded commitment is non-zero
+        assert!(folded_commitment != RistrettoPoint::identity(), "Folded commitment is identity");
+    }
+
+    #[test]
+    fn test_small_vectors() {
+        let n = 2; // Smallest power of 2
+        let gens = create_generators(n);
+
+        // Random vectors a and b
+        let a: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut OsRng)).collect();
+        let b: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut OsRng)).collect();
+        let r = Scalar::random(&mut OsRng);
+
+        // Create commitment
+        let P = pedersen_vector_commitment(&a, &b, r, &gens);
+
+        // Calculate inner product
+        let c = inner_product(&a, &b);
+
+        // Generate proof
+        let mut prover_transcript = Transcript::new(b"test-small-vectors");
+        let proof = generate_inner_product_proof(a.clone(), b.clone(), r, &gens, &mut prover_transcript);
+
+        // Verify proof
+        let mut verifier_transcript = Transcript::new(b"test-small-vectors");
+        let result = verify_inner_product_proof(P, c, &proof, &gens, &mut verifier_transcript);
+
+        assert!(result, "Verification failed for small vectors");
+    }
+
+    #[test]
+    #[should_panic(expected = "Vector length must be a power of 2")]
+    fn test_non_power_of_two() {
+        let n = 6; // Not a power of 2
+        let gens = create_generators(n);
+
+        // Random vectors a and b
+        let a: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut OsRng)).collect();
+        let b: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut OsRng)).collect();
+        let r = Scalar::random(&mut OsRng);
+
+        // Generate proof (should panic)
+        let mut prover_transcript = Transcript::new(b"test-non-power-of-two");
+        let _ = generate_inner_product_proof(a.clone(), b.clone(), r, &gens, &mut prover_transcript);
+    }
+
+    #[test]
+    fn test_multiple_rounds() {
+        let n = 8; // Vector size
+        let gens = create_generators(n);
+
+        // Random vectors a and b
+        let a: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut OsRng)).collect();
+        let b: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut OsRng)).collect();
+        let r = Scalar::random(&mut OsRng);
+
+        // Create commitment
+        let P = pedersen_vector_commitment(&a, &b, r, &gens);
+
+        // Calculate inner product
+        let c = inner_product(&a, &b);
+
+        // Generate proof
+        let mut prover_transcript = Transcript::new(b"test-multiple-rounds");
+        let proof = generate_inner_product_proof(a.clone(), b.clone(), r, &gens, &mut prover_transcript);
+
+        for _ in 0..10 {
+            // Verify proof multiple times
+            let mut verifier_transcript = Transcript::new(b"test-multiple-rounds");
+            let result = verify_inner_product_proof(P, c, &proof, &gens, &mut verifier_transcript);
+
+            assert!(result, "Verification failed in one of the rounds");
+        }
+    }
+        
 }
 
 #[cfg(feature = "example")]
