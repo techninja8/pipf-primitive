@@ -1,4 +1,16 @@
 // Pedersen-Vector Commitments with Inner Product Proofs
+//
+// This module implements the Pedersen Vector Commitment scheme with
+// logarithmic-sized Inner Product Argument proofs based on the PIPF framework.
+// The implementation uses the Ristretto group over Curve25519 for elliptic curve operations.
+//
+// Key features:
+// - Efficient vector commitments to pairs of vectors (a, b)
+// - Logarithmic-sized proofs of knowledge for inner product relation <a,b> = c
+// - Based on discrete logarithm assumptions in the Ristretto group
+//
+// Reference: "Bulletproofs: Short Proofs for Confidential Transactions and More"
+// by Bünz, Bootle, Boneh, Poelstra, Wuille, and Maxwell
 
 #![allow(unused_variables)]
 #![allow(dead_code)]
@@ -16,6 +28,9 @@ use serde::{Serialize, Deserialize};
 use sha2::{Digest, Sha512};
 use std::fmt;
 
+/// Wrapper around RistrettoPoint to implement Debug formatting
+/// 
+/// This allows for cleaner debug output of RistrettoPoint values
 struct DebugRistrettoPoint(RistrettoPoint);
 
 impl fmt::Debug for DebugRistrettoPoint {
@@ -26,8 +41,15 @@ impl fmt::Debug for DebugRistrettoPoint {
 }
 
 
+/// Protocol extensions for Merlin transcripts in zero-knowledge proofs
+/// 
+/// This trait extends Merlin transcripts with methods specific to
+/// handling Ristretto points and generating challenge scalars.
 pub trait TranscriptProtocol {
+    /// Append a compressed Ristretto point to the transcript with the given label
     fn append_point(&mut self, label: &'static [u8], point: &CompressedRistretto);
+    
+    /// Extract a challenge scalar from the transcript with the given label
     fn challenge_scalar(&mut self, label: &'static [u8]) -> Scalar;
 }
 
@@ -44,12 +66,21 @@ impl TranscriptProtocol for Transcript {
 }
 
 /// Derive a Ristretto point from a domain-separated hash label
+/// 
+/// This function creates a deterministic point from a label using SHA-512
+/// to prevent chosen base point attacks.
 fn hash_to_point(label: &[u8]) -> RistrettoPoint {
     let hash = Sha512::digest(label);
     RistrettoPoint::from_uniform_bytes(&hash[..64].try_into().unwrap())
 }
 
 /// Generators required for Pedersen Vector Commitments
+/// 
+/// This structure holds the base points needed for creating
+/// vector commitments and proofs. It contains:
+/// - G_vec: Base points for the first vector (a)
+/// - H_vec: Base points for the second vector (b)
+/// - G: Base point for the blinding factor
 #[derive(Clone)]
 pub struct Generators {
     /// Vector of base points for vector a components
@@ -61,6 +92,10 @@ pub struct Generators {
 }
 
 /// Complete proof for inner product argument
+/// 
+/// This structure contains all the elements needed to verify
+/// an inner product relation. The proof size scales logarithmically
+/// with the size of the original vectors.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct InnerProductProof {
     /// L points from each round of the protocol
@@ -77,7 +112,23 @@ pub struct InnerProductProof {
 
 /// Compute a Pedersen vector commitment to vectors a and b with blinding factor r
 ///
+/// Creates a commitment of the form:
 /// P = Sum(a_i * G_i + b_i * H_i) + r * G
+/// 
+/// This commitment hides the vectors a and b while allowing proofs about their properties.
+/// The blinding factor r ensures the commitment is hiding.
+/// 
+/// # Arguments
+/// * `a` - First vector to commit to
+/// * `b` - Second vector to commit to
+/// * `r` - Blinding factor (randomness)
+/// * `gens` - Generator points for the commitment
+/// 
+/// # Returns
+/// * A RistrettoPoint representing the commitment
+/// 
+/// # Panics
+/// * If vector dimensions don't match
 pub fn pedersen_vector_commitment(
     a: &[Scalar],
     b: &[Scalar],
@@ -103,7 +154,25 @@ pub fn pedersen_vector_commitment(
 
 /// Generate a proof that vectors a and b satisfy an inner product relation
 /// 
-/// This practically implements the Σ-protocol described in the PIPF paper with logarithmic proof size
+/// This function creates a logarithmic-sized proof that the prover knows vectors
+/// a and b committed in P such that <a,b> = c, without revealing the vectors.
+/// 
+/// The protocol works by recursively compressing the vectors in half at each step,
+/// generating proof elements L and R that allow the verifier to check correctness.
+/// 
+/// # Arguments
+/// * `a` - First vector in the inner product
+/// * `b` - Second vector in the inner product
+/// * `r` - Blinding factor used in the commitment
+/// * `gens` - Generator points for the commitment
+/// * `transcript` - Transcript for the Fiat-Shamir transformation
+/// 
+/// # Returns
+/// * A complete inner product proof
+/// 
+/// # Panics
+/// * If vector dimensions don't match
+/// * If vector length is not a power of 2
 pub fn generate_inner_product_proof(
     a: Vec<Scalar>,
     b: Vec<Scalar>,
@@ -187,7 +256,22 @@ pub fn generate_inner_product_proof(
 
 /// Verify an inner product proof
 /// 
-/// Checks if the claimed inner product c = <a,b> is correct for vectors committed in P
+/// This function verifies that a commitment P contains vectors a and b
+/// such that <a,b> = c, using only the logarithmic-sized proof elements.
+/// 
+/// The verification works by folding the original commitment P according to
+/// the same challenges used in proof generation, and checking that the result
+/// matches what would be computed from the final values.
+/// 
+/// # Arguments
+/// * `P` - The original Pedersen vector commitment
+/// * `c` - The claimed inner product value <a,b>
+/// * `proof` - The inner product proof to verify
+/// * `gens` - Generator points for the commitment
+/// * `transcript` - Transcript for the Fiat-Shamir transformation
+/// 
+/// # Returns
+/// * `true` if the proof is valid, `false` otherwise
 pub fn verify_inner_product_proof(
     P: RistrettoPoint,
     c: Scalar,
@@ -234,6 +318,18 @@ pub fn verify_inner_product_proof(
 }
 
 /// Helper function to calculate final generators after folding
+/// 
+/// This function computes the effective generators after applying
+/// all the challenge factors from the proof protocol.
+/// 
+/// # Arguments
+/// * `gens` - Original generator points
+/// * `challenges` - Challenge scalars from the proof
+/// * `challenge_inverses` - Inverses of the challenge scalars
+/// * `lg_n` - Log base 2 of the vector dimension
+/// 
+/// # Returns
+/// * A tuple of (final_G, final_H) generators
 fn calculate_final_generators(
     gens: &Generators,
     challenges: &[Scalar],
@@ -274,6 +370,19 @@ fn calculate_final_generators(
 }
 
 /// Fold all L and R values into a single commitment
+/// 
+/// This function combines all the L and R proof elements according to
+/// the challenge factors to compute the expected contribution to the
+/// final verification equation.
+/// 
+/// # Arguments
+/// * `L_vec` - L points from the proof
+/// * `R_vec` - R points from the proof
+/// * `challenges` - Challenge scalars from verification
+/// * `challenge_inverses` - Inverses of the challenge scalars
+/// 
+/// # Returns
+/// * A RistrettoPoint representing the folded commitment
 fn fold_commitments(
     L_vec: &[RistrettoPoint],
     R_vec: &[RistrettoPoint],
@@ -298,6 +407,16 @@ fn fold_commitments(
 }
 
 /// Create a set of generators suitable for Pedersen Vector Commitments
+/// 
+/// This function generates cryptographically secure base points for
+/// use in vector commitments. The points are derived deterministically
+/// from labels to ensure they have no known discrete log relationship.
+/// 
+/// # Arguments
+/// * `n` - Number of generators to create (vector dimension)
+/// 
+/// # Returns
+/// * A Generators struct with G_vec, H_vec, and G base points
 pub fn create_generators(n: usize) -> Generators {
     let mut G_vec = Vec::with_capacity(n);
     let mut H_vec = Vec::with_capacity(n);
@@ -322,6 +441,18 @@ pub fn create_generators(n: usize) -> Generators {
 }
 
 /// Helper function to compute inner product of two vectors
+/// 
+/// Calculates the sum of element-wise products a_i * b_i
+/// 
+/// # Arguments
+/// * `a` - First vector
+/// * `b` - Second vector
+/// 
+/// # Returns
+/// * The inner product as a Scalar
+/// 
+/// # Panics
+/// * If vectors have different lengths
 pub fn inner_product(a: &[Scalar], b: &[Scalar]) -> Scalar {
     assert_eq!(a.len(), b.len(), "Vectors must have the same length");
     
