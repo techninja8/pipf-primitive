@@ -243,6 +243,7 @@ dependencies = [
  "bulletproofs",
  "byte-tools",
  "curve25519-dalek",
+ "digest 0.10.7",
  "merlin",
  "rand",
  "serde",

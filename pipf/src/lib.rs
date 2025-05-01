@@ -9,11 +9,23 @@
 use curve25519_dalek::ristretto::RistrettoPoint;
 use curve25519_dalek::ristretto::CompressedRistretto;
 use curve25519_dalek::scalar::Scalar;
-use curve25519_dalek::traits::Identity;
+use curve25519_dalek::traits::{Identity, MultiscalarMul};
 use rand::rngs::OsRng;
 use merlin::Transcript;
 use serde::{Serialize, Deserialize};
+use sha2::{Digest, Sha512};
 use std::fmt;
+
+struct DebugRistrettoPoint(RistrettoPoint);
+
+impl fmt::Debug for DebugRistrettoPoint {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        // Use the compressed representation of the RistrettoPoint for printing
+        write!(f, "RistrettoPoint({:?})", self.0.compress().to_bytes())
+    }
+}
+
+
 pub trait TranscriptProtocol {
     fn append_point(&mut self, label: &'static [u8], point: &CompressedRistretto);
     fn challenge_scalar(&mut self, label: &'static [u8]) -> Scalar;
@@ -31,13 +43,10 @@ impl TranscriptProtocol for Transcript {
     }
 }
 
-struct DebugRistrettoPoint(RistrettoPoint);
-
-impl fmt::Debug for DebugRistrettoPoint {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        // Use the compressed representation of the RistrettoPoint for printing
-        write!(f, "RistrettoPoint({:?})", self.0.compress().to_bytes())
-    }
+/// Derive a Ristretto point from a domain-separated hash label
+fn hash_to_point(label: &[u8]) -> RistrettoPoint {
+    let hash = Sha512::digest(label);
+    RistrettoPoint::from_uniform_bytes(&hash[..64].try_into().unwrap())
 }
 
 /// Generators required for Pedersen Vector Commitments
@@ -290,20 +299,26 @@ fn fold_commitments(
 
 /// Create a set of generators suitable for Pedersen Vector Commitments
 pub fn create_generators(n: usize) -> Generators {
-    assert!(n.is_power_of_two(), "Number of generators must be a power of 2");
-    
     let mut G_vec = Vec::with_capacity(n);
     let mut H_vec = Vec::with_capacity(n);
-    let mut csprng = OsRng;
-    
-    // Generate random base points
-    for _ in 0..n {
-        G_vec.push(RistrettoPoint::random(&mut csprng));
-        H_vec.push(RistrettoPoint::random(&mut csprng));
+
+    for i in 0..n {
+        let Gi_input = format!("G_vec_{}", i);
+        let mut Gi_hasher = Sha512::new();
+        Gi_hasher.update(Gi_input.as_bytes());
+        let Gi = RistrettoPoint::from_hash(Gi_hasher);
+        G_vec.push(Gi);
+
+        let Hi_input = format!("H_vec_{}", i);
+        let mut Hi_hasher = Sha512::new();
+        Hi_hasher.update(Hi_input.as_bytes());
+        let Hi = RistrettoPoint::from_hash(Hi_hasher);
+        H_vec.push(Hi);
     }
-    let G = RistrettoPoint::random(&mut csprng);
-    
-    Generators { G_vec, H_vec, G }
+
+    let G = hash_to_point(b"G_blinding");
+
+    Generators { G_vec , H_vec , G }
 }
 
 /// Helper function to compute inner product of two vectors
