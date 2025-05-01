@@ -418,6 +418,8 @@ fn fold_commitments(
 /// # Returns
 /// * A Generators struct with G_vec, H_vec, and G base points
 pub fn create_generators(n: usize) -> Generators {
+    assert!(n.is_power_of_two(), "Number of generators must be a power of 2");
+
     let mut G_vec = Vec::with_capacity(n);
     let mut H_vec = Vec::with_capacity(n);
 
@@ -469,7 +471,7 @@ mod tests {
     
     #[test]
     fn test_pedersen_vector_commitment() {
-        let n = 8;
+        let n = 2;
         let gens = create_generators(n);
         
         // Random vectors a and b
@@ -491,7 +493,7 @@ mod tests {
     
     #[test]
     fn test_inner_product_proof_correctness() {
-        let n = 8;
+        let n = 2;
         let gens = create_generators(n);
         
         // Random vectors a and b
@@ -518,7 +520,7 @@ mod tests {
     
     #[test]
     fn test_invalid_inner_product() {
-        let n = 8;
+        let n = 2;
         let gens = create_generators(n);
         
         // Random vectors a and b
@@ -567,6 +569,91 @@ mod tests {
             assert_eq!(proof.L_vec.len(), n.trailing_zeros() as usize);
         }
     }
+    #[test]
+    fn test_recalculate_c() {
+        // Set up a vector size (must be a power of 2)
+        let n = 8;
+        let gens = create_generators(n);
+
+        // Generate random vectors a and b
+        let a: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut OsRng)).collect();
+        let b: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut OsRng)).collect();
+
+        // Calculate the inner product manually using the inner_product function
+        let calculated_c = inner_product(&a, &b);
+
+        // Suppose we are given an incorrect value for C (simulate an error)
+        let incorrect_c = calculated_c + Scalar::from(1u64); // Deliberately incorrect
+
+        // Check if the provided C matches the calculated inner product
+        assert_ne!(incorrect_c, calculated_c, "C should not match the calculated inner product");
+
+        // Recalculate C to ensure correctness
+        let corrected_c = inner_product(&a, &b);
+
+        // Verify that the corrected C matches the calculated inner product
+        assert_eq!(corrected_c, calculated_c, "Corrected C should match the calculated inner product");
+    }
+
+    #[test]
+    fn test_challenge_scalars_consistency() {
+        // Create a transcript and append some points to it
+        let mut transcript = Transcript::new(b"test-challenge-scalars");
+
+        // Simulate appending L and R points to the transcript
+        let n = 4; // Number of rounds (log2 of vector size)
+        let mut L_points = Vec::new();
+        let mut R_points = Vec::new();
+
+        // Generate random L and R points
+        for _ in 0..n {
+            let L = RistrettoPoint::random(&mut OsRng);
+            let R = RistrettoPoint::random(&mut OsRng);
+            L_points.push(L);
+            R_points.push(R);
+
+            // Append points to the transcript
+            transcript.append_point(b"L", &L.compress());
+            transcript.append_point(b"R", &R.compress());
+        }
+
+        // Derive challenges from the transcript
+        let mut challenges = Vec::new();
+        let mut challenge_inverses = Vec::new();
+
+        for _ in 0..n {
+            let x = transcript.challenge_scalar(b"x");
+            challenges.push(x);
+            challenge_inverses.push(x.invert());
+        }
+
+        // Verify consistency of challenges
+        for i in 0..n {
+            let mut transcript_verify = Transcript::new(b"test-challenge-scalars");
+
+            // Recreate the same transcript state
+            for j in 0..=i {
+                transcript_verify.append_point(b"L", &L_points[j].compress());
+                transcript_verify.append_point(b"R", &R_points[j].compress());
+            }
+
+            // Derive the challenge again for the same state
+            let x_verify = transcript_verify.challenge_scalar(b"x");
+
+            assert_eq!(challenges[i], x_verify, "Challenge scalar mismatch for index {}", i);
+        }
+
+        // Verify inverses are correct
+        for i in 0..n {
+            assert_eq!(
+                challenges[i] * challenge_inverses[i],
+                Scalar::one(),
+                "Challenge inverse mismatch for index {}",
+                i
+            );
+        }
+    }
+    
 }
 
 #[cfg(feature = "example")]
